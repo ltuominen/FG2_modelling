@@ -1,0 +1,142 @@
+---
+title: "SCR fit with a gaussian"
+output: html_document
+---
+
+```{r setup, include=FALSE }
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load some libraries 
+```{r, results='hide'}
+lapply(c('brms', 'tidyverse', 'tidybayes'), library, character.only = TRUE, quietly = TRUE) 
+```
+
+## Read in data 
+```{r, results='hide'}
+long <- read_csv( '/Users/laurituominen/Documents/Research/FG2/DATA/SCRanon.csv', col_types = cols())
+```
+
+## Plot raw data and fit a loess curve
+
+```{r}
+ggplot(data    = long,
+       aes(x   = morphs,
+           y   = SCRz,
+           col = subject_number))+
+  geom_point(size     = 1.2,
+             alpha    = .6,
+             position = "jitter")+ 
+  geom_smooth(method = loess,
+              formula = y ~ x,
+              se     = FALSE,
+              size   = .5, 
+              alpha  = .8)+ 
+  theme_minimal()+
+  ylab('Skin Conductance Response (z-score)') +
+  xlab('Distance from Conditioned Stimulus') +
+  theme(legend.position = "none")+
+  labs(title    = "SCR vs. Events")
+```
+
+## Calculate some reasonable priors for width 
+```{r, results='hide'}
+e =seq(0,100, by=0.1)
+h=0.614
+gauss <- function(w) { 
+  e =seq(0,100, by=0.1)
+  h=0.614
+  y= h * exp( -1 * ( e^2 / (2*w^2 )^2 ))
+  return(y)
+  } 
+w1 <- gauss(w=1); w3 <- gauss(w=3); w45<-gauss(w=4.5); w6 <- gauss(w=6); w9 <- gauss(w=9)
+df <- tibble(e=e, w1=w1, w3=w3, w45=w45, w6=w6, w9=w9)
+```
+
+## Plot priors 
+```{r}
+
+# plot priors 
+ggplot(data=df)+
+  geom_line(aes(x=e, y=w1, col='red'))+
+  geom_line(aes(x=e, y=w3, col='green'))+
+  geom_line(aes(x=e, y=w45, col='cyan'))+
+  geom_line(aes(x=e, y=w6, col='blue'))+
+  geom_line(aes(x=e, y=w9, col='magenta'))+
+  scale_color_discrete( name = "Width",
+                       breaks = c("red", "green", "cyan", "blue", "magenta"),
+                       labels = c("1", "3", "4.5", "6", "9")) +
+  ylab("response") +
+  xlab("Distance from Conditioned Stimulus")
+```
+
+## Further eplore some reasonable priors
+
+```{r}
+df = tibble(norm=rnorm(10^4, 4,1))
+ggplot(df, aes(x=norm)) + geom_histogram(color="darkblue", fill="lightblue",binwidth=0.1) +
+  ggtitle('normal(4,1)') + xlab('Value')
+```
+
+## Set formula
+Fitting a random intercept, height and width of the gaussian to predict z-scored skin conductance response. 
+Morhps refer to the distance from Conditioned Stimulus
+
+```{r}
+nlform2 <- bf(SCRz ~ i + h * exp( -1 *  (morphs ^2 / (2*w^2 )^2 )), 
+              i ~ (1 | subject_number),
+              h ~ 1, 
+              w ~ 1,
+              nl = TRUE)
+```
+
+
+## Set priors based on the simulation
+
+```{r}
+
+# choose maybe appropriate priors 
+nlprior2 <- c(prior(normal(0.5,0.2), nlpar = "h"),
+              prior(normal(4,1), nlpar = "w"))
+```
+
+## Fit 
+```{r , results='hide'}
+
+gaussian_fit <- brm(formula = nlform2, data = long, family = gaussian(),
+                    prior = nlprior2, control = list(adapt_delta = 0.995, max_treedepth = 15),
+                    iter = 20000, warmup = 2000, chains = 4, cores = 4)
+```
+
+```{r}
+summary(gaussian_fit)
+```
+
+
+## Prepare for plot
+
+```{r}
+means <- long %>%
+  select(-c('morphs')) %>%
+  pivot_wider(values_from = SCRz, names_from = Event, names_prefix = 'M')  %>%   
+  summarise(across(-c("subject_number"), ~ mean(.x)))
+
+morphs <- unique(long$morphs)
+df <- tibble(meanSCR = t(means), morphs=morphs)
+```
+
+## Plot fit
+```{r}
+p <- conditional_effects(gaussian_fit,
+                    spaghetti = T,
+                    nsamples = 200) 
+  
+ugly_plot <- plot(p, plot = FALSE)[[1]] 
+ugly_plot + 
+  geom_point(data=df, aes(y=meanSCR, x=morphs), alpha=3/4, inherit.aes=FALSE)+
+  labs(title = "Gaussian fit to the SCR") + 
+  ylab('Skin Conductance Response (z-score)') +
+  xlab('Distance from Conditioned Stimulus') +
+  theme(text=element_text(size =16)) 
+```
+
